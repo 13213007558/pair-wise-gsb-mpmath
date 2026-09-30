@@ -144,6 +144,75 @@ class MatrixCalculusMethods:
         Y *= 1
         return Y
 
+    def expm_frechet(ctx, A, E, method='taylor', compute_expm=True):
+        r"""
+        Computes the Fréchet derivative of the matrix exponential at *A* in
+        the direction *E*:
+
+        .. math ::
+
+            L_{\exp}(A, E) = \left. \frac{d}{dt} \exp(A+tE)
+                             \right|_{t=0}.
+
+        The derivative is obtained from the block-matrix identity
+
+        .. math ::
+
+            \exp \begin{pmatrix} A & E \\ 0 & A \end{pmatrix}
+            =
+            \begin{pmatrix} \exp(A) & L_{\exp}(A,E) \\ 0 & \exp(A)
+            \end{pmatrix}.
+
+        Both *A* and *E* must be square matrices of the same size. They are
+        accepted in any form supported by :func:`~mpmath.expm`, including
+        lists of lists. With *compute_expm=True* (the default), the return
+        value is ``(expm(A), L)``; with *compute_expm=False*, only ``L`` is
+        returned. The *method* argument is passed to :func:`~mpmath.expm`.
+
+        **Examples**
+
+            >>> from mpmath import mp, matrix, expm_frechet
+            >>> mp.pretty = True
+            >>> A = matrix([[0, 0], [0, 1]])
+            >>> E = matrix([[0, 1], [1, 0]])
+            >>> expA, L = expm_frechet(A, E)
+            >>> expA
+            [1.0               0.0]
+            [0.0  2.71828182845905]
+            >>> L
+            [             0.0  1.71828182845905]
+            [1.71828182845905               0.0]
+            >>> expm_frechet(A, E, compute_expm=False)
+            [             0.0  1.71828182845905]
+            [1.71828182845905               0.0]
+
+        """
+        A = ctx.matrix(A)
+        E = ctx.matrix(E)
+
+        if A.rows != A.cols:
+            raise ValueError('A must be a square matrix')
+        if E.rows != A.rows or E.cols != A.cols:
+            raise ValueError('E must have the same dimensions as A')
+
+        n = A.rows
+        B = ctx.matrix(2*n, 2*n)
+        B[:n, :n] = A
+        B[:n, n:] = E
+        B[n:, n:] = A
+
+        prec = ctx.prec
+        try:
+            F = ctx.expm(B, method=method)
+            expA = F[:n, :n]
+            derivative = F[:n, n:]
+        finally:
+            ctx.prec = prec
+
+        if compute_expm:
+            return expA, derivative
+        return derivative
+
     def cosm(ctx, A):
         r"""
         Gives the cosine of a square matrix `A`, defined in analogy

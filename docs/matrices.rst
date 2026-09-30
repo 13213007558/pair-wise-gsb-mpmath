@@ -562,6 +562,7 @@ Matrix functions
 ----------------
 
 .. autofunction :: mpmath.expm
+.. autofunction :: mpmath.expm_frechet
 .. autofunction :: mpmath.cosm
 .. autofunction :: mpmath.sinm
 .. autofunction :: mpmath.sqrtm

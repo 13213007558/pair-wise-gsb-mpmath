@@ -3,9 +3,10 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from mpmath import (arange, chebyfit, cos, cosm, differint, e, euler, exp,
-                    expm, fft, fourier, fourierval, inf, invertlaplace, invfft,
-                    j, limit, log, logm, matrix, mp, mpf, norm, pade, pi,
-                    polyroots, polyval, sin, sinm, sqrt, libmp)
+                    expm, expm_frechet, fft, fourier, fourierval, inf,
+                    invertlaplace, invfft, j, limit, log, logm, matrix, mp,
+                    mpf, norm, pade, pi, polyroots, polyval, sin, sinm, sqrt,
+                    libmp)
 
 
 def test_approximation():
@@ -257,6 +258,85 @@ def test_expm():
     # Test non-square matrix input
     A = [[1, 0], [0, 1], [0, 0]]
     pytest.raises(ValueError, lambda: expm(A))
+
+def test_expm_frechet_diagonal_and_block_identity():
+    A = [[0, 0], [0, 1]]
+    E = [[1, 2], [3, 4]]
+    expA, L = expm_frechet(A, E)
+
+    assert norm(expA - matrix([[1, 0], [0, e]]), inf) < mpf('1e-15')
+    expected = matrix([
+        [1, 2*(e - 1)],
+        [3*(e - 1), 4*e],
+    ])
+    assert norm(L - expected, inf) < mpf('1e-15')
+
+    L_only = expm_frechet(A, E, compute_expm=False)
+    assert norm(L_only - expected, inf) < mpf('1e-15')
+
+    block = matrix([
+        [0, 0, 1, 2],
+        [0, 1, 3, 4],
+        [0, 0, 0, 0],
+        [0, 0, 0, 1],
+    ])
+    F = expm(block)
+    assert norm(F[:2, :2] - expA, inf) < mpf('1e-15')
+    assert norm(F[:2, 2:] - L, inf) < mpf('1e-15')
+    assert F[2:, :2] == matrix(2, 2)
+    assert norm(F[2:, 2:] - expA, inf) < mpf('1e-15')
+
+    pytest.raises(ValueError, lambda: expm_frechet([[0, 0, 0], [0, 1, 0]], E))
+    pytest.raises(ValueError, lambda: expm_frechet(A, [[1, 2, 3], [4, 5, 6]]))
+
+def test_expm_frechet_defective_complex_high_precision():
+    with mp.workdps(120):
+        lam = 1 + j
+        q = mpf('1e30')
+        c = mpf('1e-60')
+        d = mpf('1e40') * j
+        A = matrix([[lam, q], [0, lam]])
+        E = matrix([[0, 0], [c, d]])
+
+        expA, L = expm_frechet(A, E)
+        expA_pade, L_pade = expm_frechet(A, E, method='pade')
+        expected_expA = exp(lam) * matrix([[1, q], [0, 1]])
+        expected_L = exp(lam) * matrix([
+            [q*c/2, q*d/2 + q**2*c/6],
+            [c, d],
+        ])
+
+        assert mp.mnorm(expA - expected_expA, inf) / mp.mnorm(expected_expA, inf) < mpf('1e-100')
+        assert mp.mnorm(L - expected_L, inf) / mp.mnorm(expected_L, inf) < mpf('1e-100')
+        assert mp.mnorm(L_pade - L, inf) / mp.mnorm(L, inf) < mpf('1e-80')
+        assert mp.mnorm(expA_pade - expA, inf) / mp.mnorm(expA, inf) < mpf('1e-80')
+
+        h = mpf('1e-80')
+        L_finite_difference = (expm(A + h*E) - expm(A - h*E)) / (2*h)
+        assert mp.mnorm(L_finite_difference - L, inf) / mp.mnorm(L, inf) < mpf('1e-35')
+
+        E2 = matrix([[1-j, 2*j], [-3, mpf('0.25')]])
+        alpha = mpf('3.5') - j/7
+        A_linear = matrix([[lam, 1], [0, lam]])
+        E1 = matrix([[2, -3*j], [mpf('0.5'), 1+j]])
+        L1 = expm_frechet(A_linear, E1, compute_expm=False)
+        L2 = expm_frechet(A_linear, E2, compute_expm=False)
+        L_linear = expm_frechet(A_linear, alpha*E1 + E2, compute_expm=False)
+        L_combined = alpha*L1 + L2
+        assert mp.mnorm(L_linear - L_combined, inf) / mp.mnorm(L_combined, inf) < mpf('1e-30')
+
+def test_expm_frechet_restores_precision_on_error(monkeypatch):
+    oldprec = mp.prec
+    A = matrix([[0, 1], [0, 0]])
+    E = matrix([[1, 0], [0, 1]])
+
+    def broken_expm(B, method='taylor'):
+        mp.prec += 100
+        raise RuntimeError
+
+    monkeypatch.setattr(mp, 'expm', broken_expm)
+    pytest.raises(RuntimeError, lambda: expm_frechet(A, E))
+    assert mp.prec == oldprec
 
 def test_cosm_sinm():
     # Simple test with known exact result
