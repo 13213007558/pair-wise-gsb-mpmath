@@ -144,6 +144,152 @@ class MatrixCalculusMethods:
         Y *= 1
         return Y
 
+    def expm_frechet(ctx, A, E, method='taylor'):
+        r"""
+        Computes the exponential of the square matrix `A` together with
+        the Frechet derivative of the matrix exponential at `A` in the
+        direction of the matrix `E` (of the same shape as `A`).
+
+        The Frechet derivative `L_{\\exp}(A, E)` is the linear part of
+        the perturbation of the exponential,
+
+        .. math ::
+
+            \\exp(A + tE) = \\exp(A) + t\\,L_{\\exp}(A, E) + O(t^2),
+
+        equivalently
+
+        .. math ::
+
+            L_{\\exp}(A, E) = \\int_0^1 e^{(1-s)A}\\, E\\, e^{sA} \\, ds.
+
+        It is linear in `E` and reduces to
+        `L_{\\exp}(A, E) = \\exp(A) E` when `A` and `E`
+        commute.  The result is returned as a pair ``(expm(A), L)``
+        so that both quantities are available from a single computation.
+
+        With method='taylor', both quantities are computed simultaneously
+        by differentiating the Taylor series of the exponential, combined
+        with scaling and squaring.  With method='pade', the block matrix
+        identity
+
+        .. math ::
+
+            \\exp\\begin{pmatrix} A & E \\\\ 0 & A \\end{pmatrix} =
+            \\begin{pmatrix} \\exp(A) & L_{\\exp}(A, E) \\\\
+                            0 & \\exp(A) \\end{pmatrix}
+
+        is evaluated with Pade approximants.  No finite difference
+        approximation is used, so full accuracy is maintained at any
+        working precision, also for nonnormal, nondiagonalizable or
+        badly scaled real or complex input.
+
+        **Examples**
+
+        Basic examples::
+
+            >>> from mpmath import (mp, expm, expm_frechet, matrix, eye, j,
+            ...                     ones, chop, mnorm)
+            >>> mp.pretty = True
+            >>> X, L = expm_frechet([[1, 2], [0, 3]], [[0, 1], [1, 0]])
+            >>> X
+            [2.71828182845905  17.3672550947286]
+            [             0.0  20.0855369231877]
+            >>> L
+            [5.96534571890527  14.1201912042824]
+            [8.68362754736431  11.4019093758234]
+
+        The first output agrees with :func:`~mpmath.expm`::
+
+            >>> chop(X - expm([[1, 2], [0, 3]]))
+            [0.0  0.0]
+            [0.0  0.0]
+
+        For a diagonal matrix the derivative is given elementwise by
+        `L_{ii} = e^{A_{ii}} E_{ii}` and
+        `L_{ij} = E_{ij} (e^{A_{ii}} - e^{A_{jj}}) / (A_{ii} - A_{jj})`::
+
+            >>> X, L = expm_frechet(eye(2), ones(2))
+            >>> L
+            [2.71828182845905  2.71828182845905]
+            [2.71828182845905  2.71828182845905]
+
+        `A` and `E` need not commute, and complex or badly
+        scaled input is fine::
+
+            >>> A = matrix([[j, 1e-8], [1e8, -j]])
+            >>> E = matrix([[1, j], [-j, 2]])
+            >>> X, L = expm_frechet(A, E)
+            >>> X2, L2 = expm_frechet(A, E, method='pade')
+            >>> mnorm(X - X2, 'inf') < 1e-13 and mnorm(L - L2, 'inf') < 1e-13
+            True
+
+        The result is linear in the direction `E`::
+
+            >>> A = matrix([[1, 2], [3, 4]])
+            >>> E1 = matrix([[1, 0], [1, 1]])
+            >>> E2 = matrix([[0, 1], [0, 1]])
+            >>> c = 3.5
+            >>> _, L1 = expm_frechet(A, E1)
+            >>> _, L2 = expm_frechet(A, E2)
+            >>> _, L3 = expm_frechet(A, c*E1 + 2*E2)
+            >>> mnorm(L3 - (c*L1 + 2*L2), 'inf') / mnorm(L3, 'inf') < 1e-14
+            True
+
+        """
+        A = ctx.matrix(A)
+        E = ctx.matrix(E)
+        if A.rows != A.cols:
+            raise ValueError('A must be a square matrix')
+        if E.rows != A.rows or E.cols != A.cols:
+            raise ValueError('A and E must have the same dimensions')
+        n = A.rows
+
+        if method == 'pade':
+            prec = ctx.prec
+            try:
+                ctx.prec += 2*n
+                M = ctx.zeros(2*n, 2*n)
+                M[:n, :n] = A
+                M[:n, n:] = E
+                M[n:, n:] = A
+                F = ctx._exp_pade(M)
+            finally:
+                ctx.prec = prec
+            return F[:n, :n]*1, F[:n, n:]*1
+
+        if method != 'taylor':
+            raise ValueError("unknown method '%s'" % method)
+
+        prec = ctx.prec
+        j = int(max(1, ctx.mag(ctx.mnorm(A, 'inf'))))
+        j += int(0.5*prec**0.5)
+        try:
+            ctx.prec += 10 + 2*j
+            tol = +ctx.eps
+            A = A/2**j
+            E = E/2**j
+            T = A
+            D = E
+            Y = A**0 + A
+            L = E*1
+            k = 2
+            while 1:
+                D, T = (D*A + T*E)*(1/ctx.mpf(k)), T*A*(1/ctx.mpf(k))
+                if ctx.mnorm(T, 'inf') < tol and ctx.mnorm(D, 'inf') < tol:
+                    break
+                Y += T
+                L += D
+                k += 1
+            for k in range(j):
+                L = Y*L + L*Y
+                Y = Y*Y
+        finally:
+            ctx.prec = prec
+        Y *= 1
+        L *= 1
+        return Y, L
+
     def cosm(ctx, A):
         r"""
         Gives the cosine of a square matrix `A`, defined in analogy

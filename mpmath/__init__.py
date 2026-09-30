@@ -185,6 +185,7 @@ gauss_quadrature = mp.gauss_quadrature
 rank = mp.rank
 
 expm = mp.expm
+expm_frechet = mp.expm_frechet
 sqrtm = mp.sqrtm
 powm = mp.powm
 logm = mp.logm

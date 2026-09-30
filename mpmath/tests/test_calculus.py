@@ -258,6 +258,123 @@ def test_expm():
     A = [[1, 0], [0, 1], [0, 0]]
     pytest.raises(ValueError, lambda: expm(A))
 
+def test_expm_frechet():
+    mp.dps = 15
+    # Diagonal A: closed-form elementwise derivative
+    a, b = mpf(2), mpf(-1)
+    A = matrix([[a, 0], [0, b]])
+    E = matrix([[mpf('0.3'), mpf('0.7')], [mpf('-0.2'), mpf('1.1')]])
+    X, L = mp.expm_frechet(A, E)
+    assert norm(X - matrix([[exp(a), 0], [0, exp(b)]]), inf) < 1e-13
+    L_exact = matrix([[E[0,0]*exp(a), E[0,1]*(exp(a)-exp(b))/(a-b)],
+                      [E[1,0]*(exp(b)-exp(a))/(b-a), E[1,1]*exp(b)]])
+    assert norm(L - L_exact, inf) < 1e-13
+
+    # The first output agrees with expm
+    A = matrix([[1, 2], [3, 4]])
+    E = matrix([[mpf('0.5'), -1], [2, mpf('1.5')]])
+    X, L = mp.expm_frechet(A, E)
+    assert norm(X - expm(A), inf) < 1e-12
+
+    # Noncommuting A and E: compare against the block matrix identity
+    # exp([[A, E], [0, A]]) = [[expm(A), L], [0, expm(A)]]
+    M = matrix(4)
+    M[:2, :2] = A
+    M[:2, 2:] = E
+    M[2:, 2:] = A
+    F = expm(M)
+    assert norm(X - F[:2, :2], inf) < 1e-12
+    assert norm(L - F[:2, 2:], inf) < 1e-12
+
+    # taylor and pade methods agree
+    X2, L2 = mp.expm_frechet(A, E, method='pade')
+    assert norm(X - X2, inf) < 1e-12
+    assert norm(L - L2, inf) < 1e-12
+
+    # Linearity in the direction E
+    E1 = matrix([[1, 0], [1, 1]])
+    E2 = matrix([[0, 1], [0, 1]])
+    c = mpf('3.5')
+    _, L1 = mp.expm_frechet(A, E1)
+    _, L2 = mp.expm_frechet(A, E2)
+    _, L3 = mp.expm_frechet(A, c*E1 + 2*E2)
+    assert norm(L3 - (c*L1 + 2*L2), inf) < 1e-12*norm(L3, inf)
+
+    # Nondiagonalizable (Jordan block) input
+    Jm = matrix([[2, 1], [0, 2]])
+    E = matrix([[1, 2], [3, 4]])
+    X, L = mp.expm_frechet(Jm, E)
+    assert norm(X - exp(2)*matrix([[1, 1], [0, 1]]), inf) < 1e-12
+    M = matrix(4)
+    M[:2, :2] = Jm
+    M[:2, 2:] = E
+    M[2:, 2:] = Jm
+    assert norm(L - expm(M)[:2, 2:], inf) < 1e-12
+
+    # Complex input with wildly different magnitudes
+    A = matrix([[j, 1e-8], [1e8, -j]])
+    E = matrix([[1, j], [-j, 2]])
+    X, L = mp.expm_frechet(A, E)
+    X2, L2 = mp.expm_frechet(A, E, method='pade')
+    assert norm(X - X2, inf) < 1e-12*norm(X, inf)
+    assert norm(L - L2, inf) < 1e-12*norm(L, inf)
+
+    # List input and error handling
+    X, L = mp.expm_frechet([[0, 1], [-1, 0]], [[1, 0], [0, 1]])
+    assert norm(X - matrix([[cos(1), sin(1)], [-sin(1), cos(1)]]), inf) < 1e-14
+    pytest.raises(ValueError, lambda: mp.expm_frechet([[1, 0], [0, 1], [0, 0]],
+                                                      [[1, 0], [0, 1], [0, 0]]))
+    pytest.raises(ValueError, lambda: mp.expm_frechet([[1, 0], [0, 1]],
+                                                      [[1, 0, 0], [0, 1, 0]]))
+    pytest.raises(ValueError, lambda: mp.expm_frechet([[1]], [[1]],
+                                                      method='bogus'))
+
+def test_expm_frechet_highprec():
+    # Arbitrary precision: verify against a central difference whose step
+    # is scaled with the working precision (verification only; the
+    # implementation of expm_frechet itself uses no finite differences)
+    mp.dps = 50
+    A = matrix([[mpf('0.3'), 2], [-1, mpf('0.7')]])
+    E = matrix([[1, mpf('0.5')], [mpf('-0.25'), 2]])
+    X, L = mp.expm_frechet(A, E)
+    h = mpf(2)**(-int(mp.prec)//2)
+    L_diff = (expm(A + h*E) - expm(A - h*E))/(2*h)
+    assert norm(L - L_diff, inf) < mpf(10)**(-20)*norm(L, inf)
+    # Cross-check against the block identity at still higher precision
+    dps = mp.dps
+    mp.dps = 80
+    try:
+        M = matrix(4)
+        M[:2, :2] = A
+        M[:2, 2:] = E
+        M[2:, 2:] = A
+        L_ref = expm(M)[:2, 2:]
+    finally:
+        mp.dps = dps
+    assert norm(L - L_ref, inf) < mpf(10)**(-40)*norm(L, inf)
+    mp.dps = 15
+
+def test_expm_frechet_prec_restored():
+    # Working precision must be restored both on normal return and
+    # when the computation raises
+    mp.dps = 15
+    prec = mp.prec
+    mp.expm_frechet([[1, 2], [3, 4]], [[1, 0], [0, 1]])
+    assert mp.prec == prec
+    mp.expm_frechet([[1, 2], [3, 4]], [[1, 0], [0, 1]], method='pade')
+    assert mp.prec == prec
+    orig = mp._exp_pade
+    def failing(a):
+        raise RuntimeError('boom')
+    mp._exp_pade = failing
+    try:
+        pytest.raises(RuntimeError,
+                      lambda: mp.expm_frechet([[1, 2], [3, 4]],
+                                              [[1, 0], [0, 1]], method='pade'))
+    finally:
+        mp._exp_pade = orig
+    assert mp.prec == prec
+
 def test_cosm_sinm():
     # Simple test with known exact result
     A = matrix([[-pi, 0], [0, pi]])
